@@ -1,9 +1,10 @@
-use std::cell::UnsafeCell;
+use crate::facade::cell::UnsafeCell;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
+use crate::facade::sync::atomic::{AtomicUsize, Ordering};
+use crate::facade::{thread, cell};
 
 use crate::{PopError, PushError};
+use crate::facade::sync::atomic;
 
 const LOCKED: usize = 1 << 0;
 const PUSHED: usize = 1 << 1;
@@ -34,7 +35,7 @@ impl<T> Single<T> {
 
         if state == 0 {
             // Write the value and unlock.
-            unsafe { self.slot.get().write(MaybeUninit::new(value)) }
+            unsafe { cell::write(&self.slot, MaybeUninit::new(value)) }
             self.state.fetch_and(!LOCKED, Ordering::Release);
             Ok(())
         } else if state & CLOSED != 0 {
@@ -61,7 +62,7 @@ impl<T> Single<T> {
 
             if prev == state {
                 // Read the value and unlock.
-                let value = unsafe { self.slot.get().read().assume_init() };
+                let value = unsafe { cell::read(&self.slot).assume_init() };
                 self.state.fetch_and(!LOCKED, Ordering::Release);
                 return Ok(value);
             }
@@ -119,8 +120,8 @@ impl<T> Single<T> {
 impl<T> Drop for Single<T> {
     fn drop(&mut self) {
         // Drop the value in the slot.
-        if *self.state.get_mut() & PUSHED != 0 {
-            let value = unsafe { self.slot.get().read().assume_init() };
+        if atomic::load_unique(&mut self.state) & PUSHED != 0 {
+            let value = unsafe { cell::read(&self.slot).assume_init() };
             drop(value);
         }
     }

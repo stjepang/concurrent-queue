@@ -33,11 +33,74 @@
 use std::error;
 use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::sync::atomic::{self, AtomicUsize, Ordering};
+use facade::sync::atomic::{self, AtomicUsize, Ordering};
 
 use crate::bounded::Bounded;
 use crate::single::Single;
 use crate::unbounded::Unbounded;
+
+/// An internal facade abstracting over loom and std types
+mod facade {
+    pub mod sync {
+        #[cfg(loom)]
+        pub use loom::sync::*;
+        #[cfg(not(loom))]
+        pub use std::sync::*;
+
+        pub mod atomic {
+            #[cfg(loom)]
+            pub use loom::sync::atomic::*;
+
+            #[cfg(not(loom))]
+            pub use std::sync::atomic::*;
+
+            // TODO(loom): loom may add get_mut to &mut AtomicUsize in the future
+            pub fn load_unique(atomic: &mut AtomicUsize) -> usize {
+                #[cfg(loom)]
+                let v = unsafe { atomic.unsync_load() }; // SAFETY: we have &mut
+
+                #[cfg(not(loom))]
+                let v = *atomic.get_mut();
+
+                v
+            }
+        }
+    }
+
+    pub mod cell {
+        #[cfg(loom)]
+        pub use loom::cell::*;
+        #[cfg(not(loom))]
+        pub use std::cell::*;
+
+        // TODO(loom): loom may add get() to &mut AtomicUsize in the future
+        pub unsafe fn write<T>(cell: &UnsafeCell<T>, value: T) {
+            #[cfg(loom)]
+            cell.with_mut(|ptr| ptr.write(value));
+
+            #[cfg(not(loom))]
+            cell.get().write(value);
+        }
+
+        // TODO(loom): loom may add get() to &mut AtomicUsize in the future
+        pub unsafe fn read<T>(cell: &UnsafeCell<T>) -> T {
+            #[cfg(loom)]
+            let v = cell.with(|ptr| ptr.read());
+
+            #[cfg(not(loom))]
+            let v = cell.get().read();
+
+            v
+        }
+    }
+
+    pub mod thread {
+        #[cfg(loom)]
+        pub use loom::thread::*;
+        #[cfg(not(loom))]
+        pub use std::thread::*;
+    }
+}
 
 mod bounded;
 mod single;
